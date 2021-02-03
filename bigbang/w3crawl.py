@@ -27,6 +27,8 @@ class W3cMailingListArchivesParser(email.parser.Parser):
     def parsestr(self, text, headersonly=None):
         soup = BeautifulSoup(text)
         body = self._text_for_selector(soup, '#body')
+        print("body -----------------")
+        print(body)
         msg = MIMEText(body, 'plain', 'utf-8')
 
         from_text = str(self._parse_dfn_header(
@@ -35,6 +37,8 @@ class W3cMailingListArchivesParser(email.parser.Parser):
                 '#from')))
         from_name = from_text.split('<')[0].strip()
         from_address = str(self._text_for_selector(soup, '#from a'))
+
+        print("from_name, from_address   ", from_name, from_address)
 
         from_addr = email.utils.formataddr((from_name, from_address))
         msg['From'] = from_addr
@@ -82,7 +86,7 @@ class W3cMailingListArchivesParser(email.parser.Parser):
 def normalize_mailing_list_url(url):
     if not url.endswith('/'):
         return url + '/'
-    
+
     return url
 
 def collect_from_url(url, base_arch_dir="archives", notes=None):
@@ -96,6 +100,7 @@ def collect_from_url(url, base_arch_dir="archives", notes=None):
     logging.info("Getting W3C list archive for %s", list_name)
 
     try:
+        print("url ---> ", url)
         response = urllib.request.urlopen(url)
         html = response.read()
         soup = BeautifulSoup(html)
@@ -120,15 +125,19 @@ def collect_from_url(url, base_arch_dir="archives", notes=None):
 
     for link in time_period_indices:
         link_url = urllib.parse.urljoin(url, link)
+        print("link_url --->", link_url)
         response = urllib.request.urlopen(link_url)
         html = response.read()
         soup = BeautifulSoup(html)
+        print("soup --->", soup.select("#end")[0].parent.parent)
 
+        # create filename for output
         end_date_string = soup.select(
             '#end')[0].parent.parent.select('em')[0].get_text()
         end_date = dateutil.parser.parse(end_date_string)
         year_month_mbox = end_date.strftime('%Y-%m') + '.mbox'
         mbox_path = os.path.join(arc_dir, year_month_mbox)
+        print("mbox_path ----> ", mbox_path)
 
         # looks like we've already downloaded this timeperiod
         if os.path.isfile(mbox_path):
@@ -144,6 +153,7 @@ def collect_from_url(url, base_arch_dir="archives", notes=None):
         for anchor in anchors:
             if anchor.get('href'):
                 message_url = urllib.parse.urljoin(link_url, anchor.get('href'))
+                print("message_url =5=====> ", message_url)
                 message_links.append(message_url)
 
         for message_link in message_links:

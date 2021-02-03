@@ -291,12 +291,13 @@ def collect_archive_from_url(url, archive_dir=CONFIG.mail_path, notes=None):
 
     response = urllib.request.urlopen(url)
     html = codecs.decode(response.read())
+    print("html ---> ", html)
 
     results = []
     for exp in mailing_list_path_expressions:
         results.extend(exp.findall(html))
 
-    pp(results)
+    print("results ---> ", results[0])
 
     # directory for downloaded files
     arc_dir = archive_directory(archive_dir, list_name)
@@ -309,10 +310,12 @@ def collect_archive_from_url(url, archive_dir=CONFIG.mail_path, notes=None):
     # download monthly archives
     for res in results:
         result_path = os.path.join(arc_dir, res)
+        print("result_path --->", result_path)
         # this check is redundant with urlretrieve
         if not os.path.isfile(result_path):
             gz_url = "/".join([url.strip("/"), res])
             logging.info("retrieving %s", gz_url)
+            print("gz_url --->", url, res, gz_url)
             resp = urllib.request.urlopen(gz_url)
             if resp.getcode() == 200:
                 logging.info("200 - writing file to %s", result_path)
