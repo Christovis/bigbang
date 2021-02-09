@@ -7,7 +7,6 @@ import gzip
 import logging
 import mailbox
 import os
-import pprint
 import re
 import subprocess
 import time
@@ -18,7 +17,6 @@ import warnings
 from email.header import Header
 from email.message import Message
 from email.mime.text import MIMEText
-from pprint import pprint as pp
 from typing import Dict, List, Optional, Union
 
 import numpy as np
@@ -36,6 +34,93 @@ class ListservArchiveWarning(BaseException):
     pass
 
 
+class ListservMessage:
+    """
+    Parameters
+    ----------
+
+    Methods
+    -------
+    from_url
+    get_body
+    get_header
+    """
+
+    def __init__(
+        self,
+        body: str,
+        Subject: str,
+        FromName: str,
+        FromAddr: str,
+        ToName: str,
+        ToAddr: str,
+        Date: str,
+        ContentType: str,
+    ):
+        self.Subject = Subject
+        self.Body = body
+        self.FromName = FromName
+        self.FromAddr = FromAddr
+        self.ToName = ToName
+        self.ToAddr = ToAddr
+        self.Date = Date
+        self.ContentType = ContentType
+
+    @classmethod
+    def from_url(
+        cls,
+        list_name: str,
+        url: str,
+        fields: Optional[str] = None,
+    ) -> "ListservMessage":
+        """
+        Args:
+        """
+        # TODO implement field selection, e.g. return only header, body, etc.
+        soup = get_website_content(url)
+        header = ListservMessage.get_header(soup)
+        body = ListservMessage.get_body(list_name, url, soup)
+        return cls(body, **header)
+
+    @staticmethod
+    def get_body(list_name: str, url: str, soup: BeautifulSoup) -> str:
+        """"""
+        url_root = ("/").join(url.split("/")[:-2])
+        a_tags = soup.select(f'a[href*="A3="][href*="{list_name}"]')
+        href_plain_text = [
+            tag.get("href") for tag in a_tags if "Fplain" in tag.get("href")
+        ][0]
+        body_soup = get_website_content(
+            urllib.parse.urljoin(url_root, href_plain_text)
+        )
+        return body_soup.find("pre").text
+
+    @staticmethod
+    def get_header(soup: BeautifulSoup) -> Dict[str, str]:
+        """"""
+        text = soup.find(
+            "b",
+            text=re.compile(r"^\bSubject\b"),
+        ).parent.parent.parent.parent.text
+
+        header = {}
+        for field in text.split("Parts/Attachments:")[0].splitlines():
+            if len(field) == 0:
+                continue
+            field_name = field.split(":")[0].strip()
+            field_body = field.replace(field_name + ":", "").strip()
+            header[field_name] = field_body
+
+        header["FromName"] = listserv.get_name(header["From"])
+        header["FromAddr"] = listserv.get_from(header["From"])
+        header["ToName"] = listserv.get_name(header["Reply-To"])
+        header["ToAddr"] = listserv.get_from(header["Reply-To"])
+        header["Date"] = listserv.get_date(header["Date"])
+        header["ContentType"] = header["Content-Type"]
+        del header["From"], header["Reply-To"], header["Content-Type"]
+        return header
+
+
 class ListservList:
     """
     This class handles a single mailing list of a public archive in the
@@ -47,14 +132,28 @@ class ListservList:
         The of whom the list (e.g. 3GPP_COMMON_IMS_XFER, IEEESCO-DIFUSION, ...)
     url
         The URL where the list lives
+
+    Methods
+    -------
+    from_url
+    to_dataframe
+    yield_period
+    yield_message
+
+    Example
+    -------
+    mlist = ListservList.from_url(
+        "3GPP_TSG_CT_WG6",
+        url="https://list.etsi.org/scripts/wa.exe?A0=3GPP_TSG_CT_WG6",
+        select={"years": (2020, 2021)},
+    )
     """
 
-    def __init__(self, name: str, url: str):
+    def __init__(self, name: str, url: str, msgs: List[ListservMessage]):
         self.name = name
         self.url = url
         self.url_root = ("/").join(url.split("/")[:-2])
-        self.periods = {}
-        self.messages = {}
+        self.messages = msgs
 
     def __len__(self) -> int:
         return len(self.messages)
@@ -65,20 +164,99 @@ class ListservList:
     def __getitem__(self, index):
         return self.messages[index]
 
-    # @classmethod
-    # def from_url(
-    #     cls,
-    #     name: str = "3GPP",
-    #     url: str = "https://list.etsi.org/scripts/wa.exe?",
-    #     fields: Union[List[str], str] = "total",
-    #     filter_perios: tuple = (2020, 2021),
-    #     datatype: str = "mbox",
-    # ) -> "ListservList":
-    #     """
-    #     Args:
-    #     """
-    #     for period in self.yield_period(fields, filter_perios, datatype):
-    #     return cls(name, url, ...)
+    @classmethod
+    def from_url(
+        cls,
+        name: str,
+        url: str,
+        select: Dict[str, tuple],
+    ) -> "ListservList":
+        """
+        Args:
+            name:
+            url:
+            select:
+            datatype:
+        """
+        if "fields" not in list(select.keys()):
+            select["fields"] = "total"
+        msgs = cls.get_messages(name, url, select["fields"], select["years"])
+        return cls(name, url, msgs)
+
+    @classmethod
+    def get_messages(
+        cls,
+        name: str,
+        url: str,
+        fields: str,
+        filter_yrs: tuple,
+    ) -> List[ListservMessage]:
+        """
+        Generator that yields all messages within a certain period
+        (e.g. January 2021, Week 5).
+
+        Args:
+            datatype: [mbox, dataframe]
+
+        Returns:
+        """
+        msgs = []
+        # run through periods
+        for period_url in ListservList.get_period_urls(url, filter_yrs):
+            # run through messages within period
+            for msg_url in ListservList.get_messages_urls(name, period_url):
+                msgs.append(ListservMessage.from_url(name, msg_url, fields))
+                # wait between loading messages, for politeness
+                time.sleep(1)
+        return msgs
+
+    @classmethod
+    def get_period_urls(cls, url: str, filter_yrs: tuple) -> List[str]:
+        """
+        all messages within a certain period
+        (e.g. January 2021, Week 5).
+        """
+        url_root = ("/").join(url.split("/")[:-2])
+        soup = get_website_content(url)
+        # get links to all messages within this mailing list
+        links = {
+            list_tag.find("a").text: urllib.parse.urljoin(
+                url_root, list_tag.find("a").get("href")
+            )
+            for list_tag in soup.find_all("li")
+        }
+        if filter_yrs:
+            # select messages send in time range defined by the filter
+            links = [
+                links[period]
+                for period in list(links.keys())
+                if (
+                    np.min(filter_yrs)
+                    <= int(re.findall(r"\d{4}", period)[0])
+                    <= np.max(filter_yrs)
+                )
+            ]
+        return links
+
+    @classmethod
+    def get_messages_urls(cls, name: str, url: str) -> List[str]:
+        """
+        Args:
+            url: URL to period.
+            fields: [total, header]
+
+        Returns:
+            List to message URLs.
+        """
+        url_root = ("/").join(url.split("/")[:-2])
+        soup = get_website_content(url)
+        a_tags = soup.select(f'a[href*="A2="][href*="{name}"]')
+        if a_tags:
+            a_tags = [
+                urllib.parse.urljoin(url_root, url.get("href"))
+                for url in a_tags
+            ]
+        return a_tags
 
     def to_dataframe(
         self,
@@ -117,144 +295,12 @@ class ListservList:
             finally:
                 mbox.unlock()
 
-    def yield_period(
-        self,
-        fields: Union[List[str], str] = "total",
-        filter_yr: tuple = (2020, 2021),
-        datatype: str = "mbox",
-    ):
-        """
-        Generator that yields all messages within a certain period
-        (e.g. January 2021, Week 5).
-
-        Args:
-            datatype: [mbox, dataframe]
-
-        Returns:
-        """
-        soup = get_website_content(self.url)
-
-        links = {
-            list_tag.find("a").text: urllib.parse.urljoin(
-                self.url_root, list_tag.find("a").get("href")
-            )
-            for list_tag in soup.find_all("li")
-        }
-
-        if filter_yr:
-            # filter out messages send in time range defined by the filter
-            links = {
-                period: links[period]
-                for period in list(links.keys())
-                if (
-                    np.min(filter_yr)
-                    <= int(re.findall(r"\d{4}", period)[0])
-                    <= np.max(filter_yr)
-                )
-            }
-
-        # run through periods
-        for key, link in links.items():
-
-            if datatype == "mbox":
-                msg_in_period = []
-                # run through messages within period
-                for msg in self.yield_message(link, fields):
-                    msg_in_period.append(msg)
-                    time.sleep(
-                        1
-                    )  # wait between loading messages, for politeness
-
-            elif datatype == "dataframe":
-                pass
-
-            yield {"name": key, "messages": msg_in_period}
-
-    def yield_message(
-        self,
-        url: str,
-        fields: str = "total",
-        datatype: str = "mbox",
-    ):
-        """
-        Args:
-            fields: [total, header]
-        """
-        soup = get_website_content(url)
-        a_tags = soup.select(
-            f'a[href*="A2="][href*="{self.name}"]',
-        )
-        if a_tags:
-            for a_tag in a_tags:
-                value = urllib.parse.urljoin(self.url_root, a_tag.get("href"))
-                soup = get_website_content(value)
-                if fields == "total":
-                    msg = self.get_message_body(soup)
-                else:
-                    msg = MIMEText(" ", "plain", "utf-8")
-                msg = self.get_message_header(soup, msg)
-                msg["Body"] = self.get_message_body(soup)
-                yield msg
-        else:
-            yield None
-
-    def get_message_body(self, soup: BeautifulSoup) -> str:  # MIMEText:
-        a_tags = soup.select(f'a[href*="A3="][href*="{self.name}"]')
-        href_plain_text = [
-            tag.get("href") for tag in a_tags if "Fplain" in tag.get("href")
-        ][0]
-        body_soup = get_website_content(
-            urllib.parse.urljoin(self.url_root, href_plain_text)
-        )
-        # body = MIMEText(body_soup.find("pre").text, 'plain', 'utf-8')
-        return body_soup.find("pre").text
-
-    def add_message_header(
-        self,
-        soup: BeautifulSoup,
-        msg: MIMEText,
-    ) -> dict:  # mailbox.mboxMessage:
-        text = soup.find(
-            "b",
-            text=re.compile(r"^\bSubject\b"),
-        ).parent.parent.parent.parent.text
-
-        header_fields = {}
-        for field in text.split("Parts/Attachments:")[0].splitlines():
-            if len(field) == 0:
-                continue
-            field_name = field.split(":")[0].strip()
-            field_body = field.replace(field_name + ":", "").strip()
-            header_fields[field_name] = field_body
-
-        header_fields["FromName"] = listserv.get_name(header_fields["From"])
-        header_fields["FromAddr"] = listserv.get_from(header_fields["From"])
-        header_fields["ToName"] = listserv.get_name(header_fields["Reply-To"])
-        header_fields["ToAddr"] = listserv.get_from(header_fields["Reply-To"])
-        header_fields["Date"] = listserv.get_date(header_fields["Date"])
-
-        # msg["Subject"] = header_fields["Subject"]
-        # msg["From"] = email.utils.formataddr((
-        #    listserv.get_name(header_fields["From"]),
-        #    listserv.get_from(header_fields["From"]),
-        # ))
-        # msg["To"] = email.utils.formataddr((
-        #    listserv.get_name(header_fields["Reply-To"]),
-        #    listserv.get_from(header_fields["Reply-To"]),
-        # ))
-        # msg["Date"] = listserv.get_date(header_fields["Date"])
-        # mbox_msg = mailbox.mboxMessage(msg)
-        # mbox_msg.set_from(
-        #    listserv.get_from(header_fields["From"]),
-        #    email.utils.parsedate(listserv.get_date(header_fields["Date"])),
-        # )
-        return header_fields
-
 
 class ListservArchive(object):
     """
     This class handles a public mailing list archive that uses the
     LISTSERV 16.5 format.
+    An archive is a list of ListservList elements.
 
     Parameters
     ----------
@@ -264,6 +310,23 @@ class ListservArchive(object):
         The URL where the archive lives
     lists
         A list containing the mailing lists as `ListservList` types
+
+    Methods
+    -------
+    from_url
+    from_mailing_lists
+    get_lists
+    get_sections
+    to_mbox
+
+    Example
+    -------
+    arch = ListservArchive.from_url(
+        "3GPP",
+        "https://list.etsi.org/scripts/wa.exe?",
+        "https://list.etsi.org/scripts/wa.exe?HOME",
+        {"years": (2019, 2021)},
+    )
     """
 
     def __init__(self, name: str, url: str, lists: List[ListservList]):
@@ -283,19 +346,22 @@ class ListservArchive(object):
     @classmethod
     def from_url(
         cls,
-        name: str = "3GPP",
-        url_root: str = "https://list.etsi.org/scripts/wa.exe?",
-        url_home: str = "https://list.etsi.org/scripts/wa.exe?HOME",
-        filter_yr: Dict[str, tuple] = {"year": (2019, 2021)},
-    ):
+        name: str,
+        url_root: str,
+        url_home: str,
+        select: Dict[str, tuple],
+    ) -> "ListservArchive":
         """
-        An archive is a list of ListservList elements
+        Create ListservArchive from a given URL.
 
         Args:
-        Returns:
+            name:
+            url_root:
+            url_home:
+            select:
         """
-        lists = cls.get_lists(url_root, url_home)
-        return cls.from_mailing_lists(name, url_root, lists)
+        lists = cls.get_lists(url_root, url_home, select)
+        return cls.from_mailing_lists(name, url_root, lists, select)
 
     @classmethod
     def from_mailing_lists(
@@ -303,20 +369,58 @@ class ListservArchive(object):
         name: str,
         url_root: str,
         url_mailing_lists: Union[List[str], List[ListservList]],
-    ):
+        select: Dict[str, tuple],
+    ) -> "ListservArchive":
         """
-        An archive is a list of ListservList elements
+        Create ListservArchive from a given list of 'ListservList'.
 
         Args:
-        Returns:
+            name:
+            url_root:
+            url_mailing_lists:
+
         """
         if isinstance(url_mailing_lists[0], str):
             lists = []
             for idx, url in enumerate(url_mailing_lists):
-                lists.append(ListservList(name=idx, url=url))
+                lists.append(ListservList(name=idx, url=url, select=select))
         else:
             lists = url_mailing_lists
         return cls(name, url_root, lists)
+
+    @staticmethod
+    def get_lists(
+        url_root: str,
+        url_home: str,
+        select: Dict[str, tuple],
+    ) -> List[ListservList]:
+        """
+        Created dictionary of all lists in the archive.
+
+        Args:
+
+        Returns:
+            archive_dict: the keys are the names of the lists and the value their url
+        """
+        archive = []
+        # run through archive sections
+        for url in list(
+            ListservArchive.get_sections(url_root, url_home).keys()
+        )[:1]:
+            soup = get_website_content(url)
+            a_tags_in_section = soup.select(
+                'a[href*="A0="][onmouseover*="showDesc"][onmouseout*="hideDesc"]',
+            )
+
+            # run through archive lists in section
+            for a_tag in a_tags_in_section:
+                value = urllib.parse.urljoin(url_root, a_tag.get("href"))
+                key = value.split("A0=")[-1]
+                archive.append(
+                    ListservList.from_url(name=key, url=value, select=select)
+                )
+
+        return archive
 
     def get_sections(url_root: str, url_home: str) -> int:
         """
@@ -346,34 +450,6 @@ class ListservArchive(object):
             archive_sections_dict[url_home] = "Home"
         return archive_sections_dict
 
-    @staticmethod
-    def get_lists(url_root: str, url_home: str) -> List[ListservList]:
-        """
-        Created dictionary of all lists in the archive.
-
-        Args:
-
-        Returns:
-            archive_dict: the keys are the names of the lists and the value their url
-        """
-        archive = []
-        # run through archive sections
-        for url in list(
-            ListservArchive.get_sections(url_root, url_home).keys()
-        )[:1]:
-            soup = get_website_content(url)
-            a_tags_in_section = soup.select(
-                'a[href*="A0="][onmouseover*="showDesc"][onmouseout*="hideDesc"]',
-            )
-
-            # run through archive lists in section
-            for a_tag in a_tags_in_section:
-                value = urllib.parse.urljoin(url_root, a_tag.get("href"))
-                key = value.split("A0=")[-1]
-                archive.append(ListservList(name=key, url=value))
-
-        return archive
-
     def to_mbox(self, dir_out: str):
         """
         Save Archive content to .mbox files
@@ -393,9 +469,15 @@ def get_website_content(
 
 
 if __name__ == "__main__":
-    arch = ListservArchive.from_url(
-        url_root="https://list.etsi.org/scripts/wa.exe?",
-        url_home="https://list.etsi.org/scripts/wa.exe?HOME",
-        filter_yr={"year": (2019, 2021)},
+    # arch = ListservArchive.from_url(
+    #    "3GPP",
+    #    url_root="https://list.etsi.org/scripts/wa.exe?",
+    #    url_home="https://list.etsi.org/scripts/wa.exe?HOME",
+    #    select={"years": (2020, 2021)},
+    # )
+    mlist = ListservList.from_url(
+        "3GPP_TSG_CT_WG6",
+        url="https://list.etsi.org/scripts/wa.exe?A0=3GPP_TSG_CT_WG6",
+        select={"years": (2021, 2021)},
     )
-    test = arch.to_mbox("/home/christovis/02_AGE/datactive/")
+    # test = arch.to_mbox("/home/christovis/02_AGE/datactive/")
