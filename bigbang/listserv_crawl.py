@@ -28,6 +28,18 @@ from validator_collection import checkers
 import bigbang.listserv as listserv
 
 
+class ListservMessageWarning(BaseException):
+    """Base class for Archive class specific exceptions"""
+
+    pass
+
+
+class ListservListWarning(BaseException):
+    """Base class for Archive class specific exceptions"""
+
+    pass
+
+
 class ListservArchiveWarning(BaseException):
     """Base class for Archive class specific exceptions"""
 
@@ -44,6 +56,7 @@ class ListservMessage:
     from_url
     get_body
     get_header
+    to_dict
     """
 
     def __init__(
@@ -57,8 +70,8 @@ class ListservMessage:
         Date: str,
         ContentType: str,
     ):
-        self.Subject = Subject
         self.Body = body
+        self.Subject = Subject
         self.FromName = FromName
         self.FromAddr = FromAddr
         self.ToName = ToName
@@ -71,15 +84,29 @@ class ListservMessage:
         cls,
         list_name: str,
         url: str,
-        fields: Optional[str] = None,
+        fields: str = "total",
     ) -> "ListservMessage":
         """
         Args:
         """
         # TODO implement field selection, e.g. return only header, body, etc.
         soup = get_website_content(url)
-        header = ListservMessage.get_header(soup)
-        body = ListservMessage.get_body(list_name, url, soup)
+        if fields in ["header", "total"]:
+            header = ListservMessage.get_header(soup)
+        else:
+            header = {
+                "Subject": None,
+                "FromName": None,
+                "FromAddr": None,
+                "ToName": None,
+                "ToAddr": None,
+                "Date": None,
+                "ContentType": None,
+            }
+        if fields in ["body", "total"]:
+            body = ListservMessage.get_body(list_name, url, soup)
+        else:
+            body = None
         return cls(body, **header)
 
     @staticmethod
@@ -111,14 +138,27 @@ class ListservMessage:
             field_body = field.replace(field_name + ":", "").strip()
             header[field_name] = field_body
 
-        header["FromName"] = listserv.get_name(header["From"])
-        header["FromAddr"] = listserv.get_from(header["From"])
-        header["ToName"] = listserv.get_name(header["Reply-To"])
-        header["ToAddr"] = listserv.get_from(header["Reply-To"])
+        header["FromName"] = listserv.get_name(header["From"]).strip()
+        header["FromAddr"] = listserv.get_addr(header["From"])
+        header["ToName"] = listserv.get_name(header["Reply-To"]).strip()
+        header["ToAddr"] = listserv.get_addr(header["Reply-To"])
         header["Date"] = listserv.get_date(header["Date"])
         header["ContentType"] = header["Content-Type"]
         del header["From"], header["Reply-To"], header["Content-Type"]
         return header
+
+    def to_dict(self) -> Dict[str, str]:
+        dic = {
+            "Body": self.Body,
+            "Subject": self.Subject,
+            "FromName": self.FromName,
+            "FromAddr": self.FromAddr,
+            "ToName": self.ToName,
+            "ToAddr": self.ToAddr,
+            "Date": self.Date,
+            "ContentType": self.ContentType,
+        }
+        return dic
 
 
 class ListservList:
@@ -139,13 +179,20 @@ class ListservList:
     to_dataframe
     yield_period
     yield_message
+    to_dict
+    to_pandas_dataframe
 
     Example
     -------
     mlist = ListservList.from_url(
         "3GPP_TSG_CT_WG6",
         url="https://list.etsi.org/scripts/wa.exe?A0=3GPP_TSG_CT_WG6",
-        select={"years": (2020, 2021)},
+        select={
+            "years": (2020, 2021),
+            "months": "January",
+            "weeks": [1,5],
+            "fields": "header",
+        },
     )
     """
 
@@ -161,7 +208,7 @@ class ListservList:
     def __iter__(self):
         return iter(self.messages)
 
-    def __getitem__(self, index):
+    def __getitem__(self, index) -> ListservMessage:
         return self.messages[index]
 
     @classmethod
@@ -169,7 +216,7 @@ class ListservList:
         cls,
         name: str,
         url: str,
-        select: Dict[str, tuple],
+        select: dict,
     ) -> "ListservList":
         """
         Args:
@@ -180,7 +227,32 @@ class ListservList:
         """
         if "fields" not in list(select.keys()):
             select["fields"] = "total"
-        msgs = cls.get_messages(name, url, select["fields"], select["years"])
+        msgs = cls.get_messages(name, url, select)
+        return cls.from_messages(name, url, msgs)
+
+    @classmethod
+    def from_messages(
+        cls,
+        name: str,
+        url: str,
+        messages: Union[List[str], List[ListservMessage]],
+        fields: str = "total",
+    ) -> "ListservList":
+        """"""
+        if not messages:
+            msgs = messages
+        elif isinstance(messages[0], str):
+            msgs = []
+            for idx, url in enumerate(messages):
+                msgs.append(
+                    ListservMessage.from_url(
+                        list_name=name,
+                        url=url,
+                        fields=fields,
+                    )
+                )
+        else:
+            msgs = messages
         return cls(name, url, msgs)
 
     @classmethod
@@ -188,8 +260,7 @@ class ListservList:
         cls,
         name: str,
         url: str,
-        fields: str,
-        filter_yrs: tuple,
+        select: dict,
     ) -> List[ListservMessage]:
         """
         Generator that yields all messages within a certain period
@@ -202,41 +273,83 @@ class ListservList:
         """
         msgs = []
         # run through periods
-        for period_url in ListservList.get_period_urls(url, filter_yrs):
+        for period_url in ListservList.get_period_urls(url, select):
             # run through messages within period
             for msg_url in ListservList.get_messages_urls(name, period_url):
-                msgs.append(ListservMessage.from_url(name, msg_url, fields))
+                msgs.append(
+                    ListservMessage.from_url(name, msg_url, select["fields"])
+                )
                 # wait between loading messages, for politeness
                 time.sleep(1)
         return msgs
 
     @classmethod
-    def get_period_urls(cls, url: str, filter_yrs: tuple) -> List[str]:
+    def get_period_urls(cls, url: str, select: dict) -> List[str]:
         """
         all messages within a certain period
         (e.g. January 2021, Week 5).
         """
         url_root = ("/").join(url.split("/")[:-2])
         soup = get_website_content(url)
-        # get links to all messages within this mailing list
-        links = {
-            list_tag.find("a").text: urllib.parse.urljoin(
-                url_root, list_tag.find("a").get("href")
-            )
+        # create dictionary with key indicating period and values the url
+        periods = [list_tag.find("a").text for list_tag in soup.find_all("li")]
+        urls_of_periods = [
+            urllib.parse.urljoin(url_root, list_tag.find("a").get("href"))
             for list_tag in soup.find_all("li")
-        }
-        if filter_yrs:
-            # select messages send in time range defined by the filter
-            links = [
-                links[period]
-                for period in list(links.keys())
-                if (
-                    np.min(filter_yrs)
-                    <= int(re.findall(r"\d{4}", period)[0])
-                    <= np.max(filter_yrs)
-                )
-            ]
-        return links
+        ]
+
+        for key, value in select.items():
+            if key == "years":
+                cond = lambda x: int(re.findall(r"\d{4}", x)[0])
+            elif key == "months":
+                cond = lambda x: x.split(" ")[0]
+            elif key == "weeks":
+                cond = lambda x: int(x.split(" ")[-1])
+            else:
+                continue
+
+            periodquants = [cond(period) for period in periods]
+
+            indices = ListservList.get_index_of_elements_in_selection(
+                periodquants,
+                urls_of_periods,
+                value,
+            )
+
+            periods = [periods[idx] for idx in indices]
+            urls_of_periods = [urls_of_periods[idx] for idx in indices]
+        return urls_of_periods
+
+    @staticmethod
+    def get_index_of_elements_in_selection(
+        times: list,
+        urls: List[str],
+        filtr: Union[tuple, list, int, str],
+    ) -> List[int]:
+        """
+        Filter out messages that where in a specific period. Period here is a set
+        containing units of years, months, and weeks which can have the following
+        example elements:
+            - years: (1992, 2010), [2000, 2008], 2021
+            - months: ["January", "July"], "November"
+            - weeks: (1, 4), [1, 5], 2
+
+        Args:
+        Returns:
+        """
+        if isinstance(filtr, tuple):
+            # filter year or week in range
+            cond = lambda x: (np.min(filtr) <= x <= np.max(filtr))
+        if isinstance(filtr, list):
+            # filter in year, week, or month in list
+            cond = lambda x: x in filtr
+        if isinstance(filtr, int):
+            # filter specific year or week
+            cond = lambda x: x == filtr
+        if isinstance(filtr, str):
+            # filter specific month
+            cond = lambda x: x == filtr
+        return [idx for idx, time in enumerate(times) if cond(time)]
 
     @classmethod
     def get_messages_urls(cls, name: str, url: str) -> List[str]:
@@ -258,42 +371,55 @@ class ListservList:
             ]
         return a_tags
 
-    def to_dataframe(
-        self,
-        fields: Union[List[str], str] = "total",
-    ):
+    def to_dict(self) -> Dict[str, List[str]]:
         """
-        Scrape mailing list and fill into a pandas.DataFrame.
-
-        Args:
-        Returns:
+        Place all message into a dictionary of the form:
+            dic = {
+                "Subject": [messages[0], ... , messages[n]],
+                .
+                .
+                .
+                "ContentType": [messages[0], ... , messages[n]]
+            }
         """
-        pass
+        # initialize dictionary
+        dic = {}
+        for key in list(self.messages[0].to_dict().keys()):
+            dic[key] = []
+        # run through messages
+        for msg in self.messages:
+            # run through message attributes
+            for key, value in msg.to_dict().items():
+                dic[key].append(value)
+        return dic
 
-    def to_mbox(
-        self,
-        dir_out: str = "/home/christovis/02_AGE/datactive/bigbang/archives/bigbang/archives/",
-        fields: Union[List[str], str] = "total",
-    ):
-        """
-        Save Archive content to .mbox files
+    def to_pandas_dataframe(self) -> pd.DataFrame:
+        return pd.DataFrame.from_dict(self.to_dict())
 
-        Args:
+    # def to_mbox(
+    #    self,
+    #    dir_out: str,
+    #    fields: Union[List[str], str] = "total",
+    # ):
+    #    """
+    #    Save Archive content to .mbox files
 
-        Returns:
-        """
-        for period in self.yield_period(fields):
-            file_name = (
-                period["name"].replace(" ", "_").replace(",", "").strip()
-            )
-            file_path = dir_out + file_name + ".mbox"
-            mbox = mailbox.mbox(file_path)
-            mbox.lock()
-            try:
-                [mbox.add(message) for message in period["messages"]]
-                mbox.flush()
-            finally:
-                mbox.unlock()
+    #    Args:
+
+    #    Returns:
+    #    """
+    #    for period in self.yield_period(fields):
+    #        file_name = (
+    #            period["name"].replace(" ", "_").replace(",", "").strip()
+    #        )
+    #        file_path = dir_out + file_name + ".mbox"
+    #        mbox = mailbox.mbox(file_path)
+    #        mbox.lock()
+    #        try:
+    #            [mbox.add(message) for message in period["messages"]]
+    #            mbox.flush()
+    #        finally:
+    #            mbox.unlock()
 
 
 class ListservArchive(object):
@@ -317,6 +443,8 @@ class ListservArchive(object):
     from_mailing_lists
     get_lists
     get_sections
+    to_dict
+    to_pandas_dataframe
     to_mbox
 
     Example
@@ -325,7 +453,12 @@ class ListservArchive(object):
         "3GPP",
         "https://list.etsi.org/scripts/wa.exe?",
         "https://list.etsi.org/scripts/wa.exe?HOME",
-        {"years": (2019, 2021)},
+        select={
+            "years": (2020, 2021),
+            "months": "January",
+            "weeks": [1,5],
+            "fields": "header",
+        },
     )
     """
 
@@ -349,7 +482,7 @@ class ListservArchive(object):
         name: str,
         url_root: str,
         url_home: str,
-        select: Dict[str, tuple],
+        select: dict,
     ) -> "ListservArchive":
         """
         Create ListservArchive from a given URL.
@@ -369,7 +502,7 @@ class ListservArchive(object):
         name: str,
         url_root: str,
         url_mailing_lists: Union[List[str], List[ListservList]],
-        select: Dict[str, tuple],
+        select: dict,
     ) -> "ListservArchive":
         """
         Create ListservArchive from a given list of 'ListservList'.
@@ -383,7 +516,9 @@ class ListservArchive(object):
         if isinstance(url_mailing_lists[0], str):
             lists = []
             for idx, url in enumerate(url_mailing_lists):
-                lists.append(ListservList(name=idx, url=url, select=select))
+                lists.append(
+                    ListservList.from_url(name=idx, url=url, select=select)
+                )
         else:
             lists = url_mailing_lists
         return cls(name, url_root, lists)
@@ -392,7 +527,7 @@ class ListservArchive(object):
     def get_lists(
         url_root: str,
         url_home: str,
-        select: Dict[str, tuple],
+        select: dict,
     ) -> List[ListservList]:
         """
         Created dictionary of all lists in the archive.
@@ -416,10 +551,11 @@ class ListservArchive(object):
             for a_tag in a_tags_in_section:
                 value = urllib.parse.urljoin(url_root, a_tag.get("href"))
                 key = value.split("A0=")[-1]
-                archive.append(
-                    ListservList.from_url(name=key, url=value, select=select)
+                mlist = ListservList.from_url(
+                    name=key, url=value, select=select
                 )
-
+                if len(mlist) != 0:
+                    archive.append(mlist)
         return archive
 
     def get_sections(url_root: str, url_home: str) -> int:
@@ -435,7 +571,6 @@ class ListservArchive(object):
         sections = soup.select(
             'a[href*="INDEX="][href*="p="]',
         )
-
         archive_sections_dict = {}
         if sections:
             for sec in sections:
@@ -445,10 +580,41 @@ class ListservArchive(object):
                     continue
                 archive_sections_dict[key] = value
             # TODO check that p=1 is included
-
         else:
             archive_sections_dict[url_home] = "Home"
         return archive_sections_dict
+
+    def to_dict(self) -> Dict[str, List[str]]:
+        """
+        Place all message in all lists into a dictionary of the form:
+            dic = {
+                "Subject": [messages[0], ... , messages[n]],
+                .
+                .
+                .
+                "ListName": [messages[0], ... , messages[n]]
+                "ListURL": [messages[0], ... , messages[n]]
+            }
+        """
+        # initialize dictionary
+        dic = {}
+        for key in list(self.lists[0].messages[0].to_dict().keys()):
+            dic[key] = []
+        dic["ListName"] = []
+        dic["ListURL"] = []
+        # run through lists
+        for mlist in self.lists:
+            # run through messages
+            for msg in mlist.messages:
+                # run through message attributes
+                for key, value in msg.to_dict().items():
+                    dic[key].append(value)
+                dic["ListName"].append(mlist.name)
+                dic["ListURL"].append(mlist.url)
+        return dic
+
+    def to_pandas_dataframe(self) -> pd.DataFrame:
+        return pd.DataFrame.from_dict(self.to_dict())
 
     def to_mbox(self, dir_out: str):
         """
@@ -469,15 +635,32 @@ def get_website_content(
 
 
 if __name__ == "__main__":
-    # arch = ListservArchive.from_url(
-    #    "3GPP",
-    #    url_root="https://list.etsi.org/scripts/wa.exe?",
-    #    url_home="https://list.etsi.org/scripts/wa.exe?HOME",
-    #    select={"years": (2020, 2021)},
-    # )
+    arch = ListservArchive.from_url(
+        "3GPP",
+        url_root="https://list.etsi.org/scripts/wa.exe?",
+        url_home="https://list.etsi.org/scripts/wa.exe?HOME",
+        select={
+            "years": 2021,
+            "months": "January",
+            "weeks": 1,
+            "fields": "total",
+        },
+    )
+    print(f"Lenght of arch = {len(arch)}")
+    print(arch.to_dict()["Subject"])
     mlist = ListservList.from_url(
         "3GPP_TSG_CT_WG6",
         url="https://list.etsi.org/scripts/wa.exe?A0=3GPP_TSG_CT_WG6",
-        select={"years": (2021, 2021)},
+        # select={"years": (2021, 2021)},
+        select={
+            "years": 2021,
+            "months": "January",
+            "weeks": 1,
+            "fields": "header",
+        },
     )
+    print(f"Lenght of mlist = {len(mlist)}")
+    print(mlist.messages[0].Subject)
+    print(mlist.messages[1].Subject)
+    print(mlist.messages[2].Subject)
     # test = arch.to_mbox("/home/christovis/02_AGE/datactive/")

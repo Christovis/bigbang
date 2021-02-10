@@ -127,7 +127,7 @@ def _get_header(
 
     # filter out building blocks for GNU-Mailman format
     header_dict["Mm-Date"] = get_date(header_dict["Date"])
-    header_dict["Mm-From"] = get_from(header_dict["From"])
+    header_dict["Mm-From"] = get_addr(header_dict["From"])
     header_dict["Mm-Name"] = get_name(header_dict["From"])
     header_dict["Message-ID"] = create_message_id(
         header_dict["Mm-Date"],
@@ -177,11 +177,15 @@ def get_date(
     return date_time_obj.strftime("%c")
 
 
-def get_from(
+def get_addr(
     line: str,
 ) -> str:
     # get string in between < and >
-    email_of_sender = re.findall(r"\<(.*)\>", line)[0]
+    email_of_sender = re.findall(r"\<(.*)\>", line)
+    if email_of_sender:
+        email_of_sender = email_of_sender[0]
+    else:
+        email_of_sender = None
     return email_of_sender
 
 
@@ -189,11 +193,14 @@ def get_name(
     line: str,
 ) -> str:
     # get string in between < and >
-    email_of_sender = re.findall(r"\<(.*)\>", line)[0]
-    # remove email_of_sender from line
-    name = line.replace("<" + email_of_sender + ">", "")
-    # remove special characters
-    name = re.sub(r"[^a-zA-Z0-9]+", " ", name)
+    email_of_sender = re.findall(r"\<(.*)\>", line)
+    if email_of_sender:
+        # remove email_of_sender from line
+        name = line.replace("<" + email_of_sender[0] + ">", "")
+        # remove special characters
+        name = re.sub(r"[^a-zA-Z0-9]+", " ", name)
+    else:
+        name = line
     return name
 
 
