@@ -73,7 +73,7 @@ class Node:
         self.processed = False
         self.prop = dict()
 
-    def add_successor(self, successor):
+    def add_successor(self, successor: list):
         """Add a node which has a message that is a reply to this node"""
         self.successors.append(successor)
 

@@ -157,7 +157,6 @@ def get_date(message):
         ds = re.sub(r"\(.*$", "", ds)
         ds = re.sub("--", "-", ds)
         ds = re.sub(" Hora.*$", "", ds)
-
         date = dp.parse(ds)
 
         # this adds noise and could raise trouble

@@ -51,7 +51,6 @@ class Archive(object):
         and sorts its member variable *data* by Date.
         """
         self.data = df
-
         try:
             self.data["Date"] = pd.to_datetime(
                 self.data["Date"],
@@ -125,11 +124,6 @@ class Archive(object):
             raise ArchiveWarning(
                 "Error while sorting, maybe timezone issues?"
                 + f" The error message is: {e}",
-            )
-
-        if self.data.empty:
-            raise mailman.MissingDataException(
-                "Archive after initial processing is empty. Was data collected properly?"
             )
 
     @classmethod

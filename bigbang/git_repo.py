@@ -140,7 +140,6 @@ class GitRepo(object):
             raw[attrib] = list()
         repo = self.repo
         self.gen_data(repo, raw)
-
         time_index = pd.DatetimeIndex(raw["Time"]).to_period("H")
         time_index = utils.add_freq(time_index, freq=None)
         self._commit_data = pd.DataFrame(raw, index=time_index)

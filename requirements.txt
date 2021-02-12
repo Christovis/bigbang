@@ -30,7 +30,10 @@ testfixtures
 git+https://github.com/gitpython-developers/GitPython.git
 
 # dev-dependencies
+<<<<<<< HEAD
 pre-commit
+=======
+>>>>>>> master
 black
 isort
 pytest

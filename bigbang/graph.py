@@ -41,7 +41,6 @@ def messages_to_interaction_graph(messages, verbose=False, clean=True):
     IG = nx.DiGraph()
 
     from_dict = {}
-
     sender_counts = {}
     reply_counts = {}
 

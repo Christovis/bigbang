@@ -208,44 +208,6 @@ class TestArchive(unittest.TestCase):
             arx.data.shape == arx2.data.shape,
             msg="Original and restored archives are different shapes",
         )
-        self.assertTrue(
-            (arx2.data.index == arx.data.index).all(),
-            msg="Original and restored archives have nonidentical indices",
-        )
-        self.assertTrue(
-            [t.get_num_messages() for t in arx.get_threads()] == [3, 1, 2],
-            msg="Thread message count in mbox archive is off",
-        )
-        self.assertTrue(
-            [t.get_num_messages() for t in arx2.get_threads()] == [3, 1, 2],
-            msg="Thread message count in restored archive is off",
-        )
-        # smoke test entity resolution
-        arx2.resolve_entities()
-        os.remove("test.csv")
-
-    def test_clean_message(self):
-        arx = archive.Archive.from_file(
-            dir_test_base + "data/2001-November.txt",
-            mbox=True,
-            email_list_software="GNU-Mailman",
-        )
-        body = arx.data["Body"]["<E165uMn-0002IJ-00@spock.physics.mcgill.ca>"]
-        self.assertTrue(
-            "But seemingly it is even stranger than this." in body,
-            msg="Selected wrong message",
-        )
-        self.assertTrue(
-            "Is it a problem of lapack3.0 of of" in body,
-            msg="Quoted text is not in uncleaned message",
-        )
-        self.assertTrue(
-            "Is it a problem of lapack3.0 of of"
-            not in utils.clean_message(body),
-            msg="Quoted text is in cleaned message",
-        )
-
-    def test_email_entity_resolution(self):
         arx = archive.Archive.from_file(
             dir_test_base + "data/2001-November.txt",
             mbox=True,

@@ -22,9 +22,7 @@ from config.config import CONFIG
 from . import parse, w3crawl
 
 ml_exp = re.compile(r"/([\w-]+)/?$")
-
 txt_exp = re.compile(r'href="(\d\d\d\d-\w*\.txt)"')
-
 gz_exp = re.compile(r'href="(\d\d\d\d-\w*\.txt\.gz)"')
 ietf_ml_exp = re.compile(r'href="([\d-]+.mail)"')
 w3c_archives_exp = re.compile(r"lists\.w3\.org")
