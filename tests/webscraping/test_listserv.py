@@ -13,15 +13,25 @@ from config.config import CONFIG
 
 dir_temp = tempfile.gettempdir()
 project_directory = str(Path(os.path.abspath(__file__)).parent.parent.parent)
-url_archive = "https://list.etsi.org/scripts/wa.exe?"
-url_list = url_archive + "A0=3GPP_TSG_CT_WG6"
-url_message = url_archive + "A2=ind2101A&L=3GPP_TSG_CT_WG6&O=D&P=1870"
 file_temp_mbox = dir_temp + "/listserv.mbox"
 file_auth = project_directory + "/config/authentication.yaml"
 auth_key_mock = {"username": "bla", "password": "bla"}
 
+urls = {
+    "3GPP": {
+        "archive": "https://list.etsi.org/scripts/wa.exe?",
+        "list": "https://list.etsi.org/scripts/wa.exe?A0=3GPP_TSG_CT_WG6",
+        "message": "https://list.etsi.org/scripts/wa.exe?A2=ind2101A&L=3GPP_TSG_CT_WG6&O=D&P=1870",
+    },
+    "IEEE": {
+        "archive": "https://listserv.ieee.org/cgi-bin/wa?",
+        "list": "https://listserv.ieee.org/cgi-bin/wa?A0=TORONTO-YP",
+        "message": "https://listserv.ieee.org/cgi-bin/wa?A2=ind14&L=TORONTO-YP&P=62",
+    },
+}
 
-class TestListservMessage:
+
+class Test3GPPListservMessage:
     @pytest.mark.skipif(
         not os.path.isfile(file_auth),
         reason="Key to log into LISTSERV could not be found",
@@ -31,7 +41,7 @@ class TestListservMessage:
             auth_key = yaml.safe_load(stream)
         msg = ListservMessage.from_url(
             list_name="3GPP_TSG_CT_WG6",
-            url=url_message,
+            url=urls["3GPP"]["message"],
             fields="total",
             login=auth_key,
         )
@@ -42,7 +52,7 @@ class TestListservMessage:
     def test__from_url_without_login(self):
         msg = ListservMessage.from_url(
             list_name="3GPP_TSG_CT_WG6",
-            url=url_message,
+            url=urls["3GPP"]["message"],
             fields="total",
             login=auth_key_mock,
         )
@@ -59,7 +69,7 @@ class TestListservMessage:
     def test__only_header_from_url(self):
         msg = ListservMessage.from_url(
             list_name="3GPP_TSG_CT_WG6",
-            url=url_message,
+            url=urls["3GPP"]["message"],
             fields="header",
             login=auth_key_mock,
         )
@@ -68,7 +78,7 @@ class TestListservMessage:
     def test__only_body_from_url(self):
         msg = ListservMessage.from_url(
             list_name="3GPP_TSG_CT_WG6",
-            url=url_message,
+            url=urls["3GPP"]["message"],
             fields="body",
             login=auth_key_mock,
         )
@@ -90,7 +100,28 @@ class TestListservMessage:
         Path(file_temp_mbox).unlink()
 
 
-class TestListservList:
+class TestIEEEListservMessage:
+    def test__from_IEEE_url_without_login(self):
+        msg = ListservMessage.from_url(
+            list_name="TORONTO-YP",
+            url=urls["IEEE"]["message"],
+            fields="total",
+            login=auth_key_mock,
+        )
+        print(msg.toaddr, msg.fromaddr)
+        assert (
+            msg.body.split(",")[0] == "This is testing the ListServ. Currently"
+        )
+        assert msg.subject == "Test"
+        assert msg.fromname == "Robert Vice"
+        assert msg.fromaddr == "[log in to unmask]"
+        assert msg.toname == "Robert Vice"
+        assert msg.toaddr == "[log in to unmask]"
+        assert msg.date == "Thu Dec 11 10:44:35 2014"
+        assert msg.contenttype == "text/plain"
+
+
+class Test3GPPListservList:
     @pytest.mark.skipif(
         not os.path.isfile(file_auth),
         reason="Key to log into LISTSERV could not be found",
@@ -100,7 +131,7 @@ class TestListservList:
             auth_key = yaml.safe_load(stream)
         mlist = ListservList.from_url(
             name="3GPP_TSG_CT_WG6",
-            url=url_list,
+            url=urls["3GPP"]["list"],
             select={
                 "years": 2021,
                 "months": "January",
@@ -116,7 +147,7 @@ class TestListservList:
     def test__from_url_without_login(self):
         mlist = ListservList.from_url(
             name="3GPP_TSG_CT_WG6",
-            url=url_list,
+            url=urls["3GPP"]["list"],
             select={
                 "years": 2021,
                 "months": "January",
@@ -126,7 +157,7 @@ class TestListservList:
             login=auth_key_mock,
         )
         assert mlist.name == "3GPP_TSG_CT_WG6"
-        assert mlist.source == url_list
+        assert mlist.source == urls["3GPP"]["list"]
         assert len(mlist) == 3
         assert mlist.messages[0].subject == "Happy New Year 2021"
         return mlist
@@ -155,7 +186,19 @@ class TestListservList:
         Path(file_temp_mbox).unlink()
 
 
-class TestListservArchive:
+class TestIEEEListservList:
+    def test__list_from_IEEE_url_with_login(self):
+        mlist = ListservList.from_url(
+            name="TORONTO-YP",
+            url=urls["IEEE"]["list"],
+            login=auth_key_mock,
+        )
+        assert len(mlist) == 1
+        assert mlist.messages[0].subject == "Test"
+        assert mlist.messages[0].fromname == "Robert Vice"
+
+
+class Test3GPPListservArchive:
     @pytest.mark.skipif(
         not os.path.isfile(file_auth),
         reason="Key to log into LISTSERV could not be found",
@@ -165,8 +208,8 @@ class TestListservArchive:
             auth_key = yaml.safe_load(stream)
         arch = ListservArchive.from_url(
             name="3GPP",
-            url_root=url_archive,
-            url_home=url_archive + "HOME",
+            url_root=urls["3GPP"]["archive"],
+            url_home=urls["3GPP"]["archive"] + "HOME",
             select={
                 "years": 2021,
                 "months": "January",
@@ -185,8 +228,8 @@ class TestListservArchive:
     def test__from_url_wihout_login(self):
         arch = ListservArchive.from_url(
             name="3GPP",
-            url_root=url_archive,
-            url_home=url_archive + "HOME",
+            url_root=urls["3GPP"]["archive"],
+            url_home=urls["3GPP"]["archive"] + "HOME",
             select={
                 "years": 2021,
                 "months": "January",
@@ -197,7 +240,7 @@ class TestListservArchive:
             instant_dump=False,
         )
         assert arch.name == "3GPP"
-        assert arch.url == url_archive
+        assert arch.url == urls["3GPP"]["archive"]
         assert len(arch) == 4
         assert len(arch.lists[0]) == 3
         assert arch.lists[0].messages[0].subject == "Happy New Year 2021"
